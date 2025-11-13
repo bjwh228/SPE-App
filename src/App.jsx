@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { supabase } from "./supabaseClient"
 import { Auth } from "@supabase/auth-ui-react"
 import { ThemeSupa } from "@supabase/auth-ui-shared"
@@ -11,6 +11,17 @@ export default function App() {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
   const [profileComplete, setProfileComplete] = useState(null)
+
+  const handleSignOut = useCallback(async () => {
+    try {
+      await supabase.auth.signOut()
+    } catch (err) {
+      console.error("Error signing out:", err)
+    } finally {
+      setSession(null)
+      setProfileComplete(null)
+    }
+  }, [])
 
   // ---- initialize & listen for session changes without logging out on refresh ----
   useEffect(() => {
@@ -127,6 +138,9 @@ export default function App() {
       <div className="app-header">
         <img src="/CS499.png" alt="CS499 Logo" className="app-logo" />
         <div className="app-header-title">Stress Performance Evaluation App</div>
+        <button className="logout-button" type="button" onClick={handleSignOut}>
+          Log Out
+        </button>
       </div>
       <div className="app-content">
         <Routes>
