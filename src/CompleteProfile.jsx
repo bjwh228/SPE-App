@@ -41,19 +41,19 @@ export default function CompleteProfile() {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-4">
-      <form onSubmit={handleSubmit} className="w-full max-w-md space-y-4">
-        <h1 className="text-2xl font-semibold text-center">Complete Your Profile</h1>
+    <div className="complete-profile-container">
+      <form onSubmit={handleSubmit} className="complete-profile-form">
+        <h1 className="complete-profile-title">Complete Your Profile</h1>
 
         <input
-          className="border p-2 w-full rounded"
+          className="profile-input"
           placeholder="Full Name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
         />
         <input
-          className="border p-2 w-full rounded"
+          className="profile-input"
           type="number"
           placeholder="Age"
           value={age}
@@ -61,7 +61,7 @@ export default function CompleteProfile() {
           required
         />
         <select
-          className="border p-2 w-full rounded"
+          className="profile-input"
           value={sex}
           onChange={(e) => setSex(e.target.value)}
           required
@@ -72,9 +72,8 @@ export default function CompleteProfile() {
           <option value="other">Other</option>
         </select>
 
-        {/* 👇 new Baseline HR field */}
         <input
-          className="border p-2 w-full rounded"
+          className="profile-input"
           type="number"
           placeholder="Baseline Heart Rate (bpm)"
           value={baselineHr}
@@ -82,11 +81,11 @@ export default function CompleteProfile() {
           required
         />
 
-        {error && <p className="text-red-500">{error}</p>}
+        {error && <p className="profile-error">{error}</p>}
         <button
           type="submit"
           disabled={saving}
-          className="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700 disabled:opacity-60"
+          className="profile-submit-button"
         >
           {saving ? "Saving..." : "Save Profile"}
         </button>

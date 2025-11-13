@@ -5,38 +5,77 @@ import { ThemeSupa } from "@supabase/auth-ui-shared"
 import { Routes, Route, Navigate } from "react-router-dom"
 import CompleteProfile from "./CompleteProfile"
 import LandingPage from "./LandingPage"
+import "./App.css"
 
 export default function App() {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [profileComplete, setProfileComplete] = useState(false)
-  const [hasProfile, setHasProfile] = useState(false)
+  const [profileComplete, setProfileComplete] = useState(null)
 
-  // ---- session listener ----
+  // ---- initialize & listen for session changes without logging out on refresh ----
   useEffect(() => {
-    const getSession = async () => {
-      const { data } = await supabase.auth.getSession()
-      setSession(data.session)
-      setLoading(false)
+    let isMounted = true
+    const hasWindow = typeof window !== "undefined"
+    const hash = hasWindow ? window.location.hash : ""
+    const isSignupRedirect = hasWindow && hash.includes("type=signup")
+
+    const syncSession = async (incomingSession) => {
+      try {
+        let nextSession = incomingSession ?? null
+        if (nextSession) {
+          const expiresAt = nextSession.expires_at
+          const now = Math.floor(Date.now() / 1000)
+
+          if (expiresAt && expiresAt < now) {
+            await supabase.auth.signOut()
+            nextSession = null
+          }
+        }
+
+        if (isMounted) setSession(nextSession)
+      } catch (err) {
+        console.error("Error syncing session:", err)
+        if (isMounted) setSession(null)
+      }
     }
-    getSession()
+
+    const initializeSession = async () => {
+      try {
+        const { data } = await supabase.auth.getSession()
+        await syncSession(data.session ?? null)
+
+        if (isSignupRedirect && hasWindow) {
+          window.history.replaceState(null, "", window.location.pathname + window.location.search)
+        }
+      } catch (err) {
+        console.error("Error initializing session:", err)
+        if (isMounted) setSession(null)
+      } finally {
+        if (isMounted) setLoading(false)
+      }
+    }
+
+    initializeSession()
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
+      syncSession(session)
     })
 
-    return () => listener.subscription.unsubscribe()
+    return () => {
+      isMounted = false
+      listener.subscription.unsubscribe()
+    }
   }, [])
 
   // ---- profile check ----
   useEffect(() => {
     const checkProfile = async () => {
       if (!session) {
-        // no user yet
-        setHasProfile(false)
-        setProfileComplete(false)
+        setProfileComplete(null)
         return
       }
+
+      setProfileComplete(null)
 
       const { data, error } = await supabase
         .from("Users")
@@ -50,12 +89,10 @@ export default function App() {
       }
 
       if (!data) {
-        setHasProfile(false)
         setProfileComplete(false)
         return
       }
 
-      setHasProfile(true)
       setProfileComplete(Boolean(data.name && data.age && data.sex))
     }
 
@@ -63,35 +100,51 @@ export default function App() {
   }, [session])
 
   // ---- loading indicator ----
-  if (loading) return <div>Loading...</div>
+  if (loading) return <div className="loading">Loading...</div>
 
   // ---- not logged in ----
   if (!session) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <Auth supabaseClient={supabase} appearance={{ theme: ThemeSupa }} />
+      <div className="app-layout">
+        <div className="app-header">
+          <img src="/CS499.png" alt="CS499 Logo" className="app-logo" />
+          <div className="app-header-title">Stress Performance Evaluation App</div>
+        </div>
+        <div className="app-content auth-container">
+          <Routes>
+            <Route path="*" element={<Auth supabaseClient={supabase} appearance={{ theme: ThemeSupa }} />} />
+          </Routes>
+        </div>
       </div>
     )
   }
 
+  if (profileComplete === null) return <div className="loading">Loading profile...</div>
+
   // ---- logged in ----
   return (
-    <Routes>
-      <Route path="/complete-profile" element={<CompleteProfile />} />
-      <Route path="/landing" element={<LandingPage />} />
-      {/* catch all */}
-      <Route
-        path="*"
-        element={
-          !hasProfile ? (
-            <Navigate to="/complete-profile" replace />
-          ) : profileComplete ? (
-            <Navigate to="/landing" replace />
-          ) : (
-            <Navigate to="/complete-profile" replace />
-          )
-        }
-      />
-    </Routes>
+    <div className="app-layout">
+      <div className="app-header">
+        <img src="/CS499.png" alt="CS499 Logo" className="app-logo" />
+        <div className="app-header-title">Stress Performance Evaluation App</div>
+      </div>
+      <div className="app-content">
+        <Routes>
+          <Route
+            path="/complete-profile"
+            element={profileComplete ? <Navigate to="/landing" replace /> : <CompleteProfile />}
+          />
+          <Route
+            path="/landing"
+            element={profileComplete ? <LandingPage session={session} /> : <Navigate to="/complete-profile" replace />}
+          />
+          {/* catch all */}
+          <Route
+            path="*"
+            element={<Navigate to={profileComplete ? "/landing" : "/complete-profile"} replace />}
+          />
+        </Routes>
+      </div>
+    </div>
   )
 }
