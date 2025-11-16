@@ -5,6 +5,7 @@ const TABS = [
   { id: "sessions", label: "Sessions" },
   { id: "interventions", label: "Interventions" },
   { id: "planner", label: "Plan Event" },
+  { id: "profile", label: "Update Profile" },
 ]
 
 const INTERVENTION_FORM_DEFAULT = {
@@ -22,6 +23,22 @@ const SESSION_FORM_DEFAULT = {
   notes: "",
 }
 
+const SESSION_METRICS_DEFAULT = {
+  sessionId: "",
+  session_hr: "",
+  session_bp_systolic: "",
+  session_bp_diastolic: "",
+}
+
+const PROFILE_FORM_DEFAULT = {
+  name: "",
+  age: "",
+  sex: "",
+  baseline_hr: "",
+  baseline_bp_systolic: "",
+  baseline_bp_diastolic: "",
+}
+
 export default function LandingPage({ session }) {
   const userId = session?.user?.id
 
@@ -35,16 +52,23 @@ export default function LandingPage({ session }) {
 
   const [interventionForm, setInterventionForm] = useState(INTERVENTION_FORM_DEFAULT)
   const [sessionForm, setSessionForm] = useState(SESSION_FORM_DEFAULT)
+  const [sessionMetricsForm, setSessionMetricsForm] = useState(SESSION_METRICS_DEFAULT)
+  const [profileForm, setProfileForm] = useState(PROFILE_FORM_DEFAULT)
 
   const [interventionError, setInterventionError] = useState(null)
   const [sessionError, setSessionError] = useState(null)
+  const [sessionMetricsStatus, setSessionMetricsStatus] = useState(null)
   const [planStatus, setPlanStatus] = useState(null)
+  const [profileStatus, setProfileStatus] = useState(null)
 
   const [savingIntervention, setSavingIntervention] = useState(false)
   const [savingSession, setSavingSession] = useState(false)
+  const [updatingSessionMetrics, setUpdatingSessionMetrics] = useState(false)
   const [assigningPlan, setAssigningPlan] = useState(false)
+  const [savingProfile, setSavingProfile] = useState(false)
 
   const [supportsUserScopedInterventions, setSupportsUserScopedInterventions] = useState(true)
+  const [supportsSessionMetrics, setSupportsSessionMetrics] = useState(true)
 
   const [planSelection, setPlanSelection] = useState({
     sessionId: "",
@@ -52,28 +76,60 @@ export default function LandingPage({ session }) {
     notes: "",
   })
 
-  useEffect(() => {
+  const loadProfile = useCallback(async () => {
     if (!userId) return
 
-    const loadProfile = async () => {
-      setProfileLoading(true)
-      const { data, error } = await supabase
+    setProfileLoading(true)
+    const selection = "name, baseline_hr, age, sex, baseline_bp_systolic, baseline_bp_diastolic"
+    const { data, error } = await supabase
+      .from("Users")
+      .select(selection)
+      .eq("id", userId)
+      .maybeSingle()
+
+    if (error && error.code === "42703") {
+      const { data: fallbackData, error: fallbackError } = await supabase
         .from("Users")
-        .select("name, baseline_hr")
+        .select("name, baseline_hr, age, sex")
         .eq("id", userId)
         .maybeSingle()
 
-      if (error) {
-        console.error("Error loading profile:", error.message)
+      if (fallbackError) {
+        console.error("Error loading profile:", fallbackError.message)
+        setProfile(null)
       } else {
-        setProfile(data)
+        setProfile(fallbackData)
       }
-
       setProfileLoading(false)
+      return
     }
 
-    loadProfile()
+    if (error) {
+      console.error("Error loading profile:", error.message)
+      setProfile(null)
+    } else {
+      setProfile(data)
+    }
+
+    setProfileLoading(false)
   }, [userId])
+
+  useEffect(() => {
+    if (!userId) return
+    loadProfile()
+  }, [userId, loadProfile])
+
+  useEffect(() => {
+    if (!profile) return
+    setProfileForm({
+      name: profile.name ?? "",
+      age: profile.age ? String(profile.age) : "",
+      sex: profile.sex ?? "",
+      baseline_hr: profile.baseline_hr ? String(profile.baseline_hr) : "",
+      baseline_bp_systolic: profile.baseline_bp_systolic ? String(profile.baseline_bp_systolic) : "",
+      baseline_bp_diastolic: profile.baseline_bp_diastolic ? String(profile.baseline_bp_diastolic) : "",
+    })
+  }, [profile])
 
   const fetchInterventions = useCallback(async () => {
     if (!userId) return
@@ -134,6 +190,10 @@ export default function LandingPage({ session }) {
     setPlanSelection((prev) => ({ ...prev, [field]: value }))
   }
 
+  const handleProfileInput = (field, value) => {
+    setProfileForm((prev) => ({ ...prev, [field]: value }))
+  }
+
   const handleInterventionSubmit = async (event) => {
     event.preventDefault()
     if (!userId) return
@@ -189,12 +249,15 @@ export default function LandingPage({ session }) {
       notes: sessionForm.notes.trim() || null,
     }
 
-    const { error } = await supabase.from("Sessions").insert(payload)
+    const { data: newSessions, error } = await supabase.from("Sessions").insert(payload).select().limit(1)
 
     if (error) {
       setSessionError(error.message)
     } else {
       setSessionForm(SESSION_FORM_DEFAULT)
+      if (newSessions?.length) {
+        setSessions((prev) => [...prev, ...newSessions])
+      }
       await fetchSessions()
     }
 
@@ -243,6 +306,84 @@ export default function LandingPage({ session }) {
     }
 
     setAssigningPlan(false)
+  }
+
+  const handleSessionMetricsSubmit = async (event) => {
+    event.preventDefault()
+    setSessionMetricsStatus(null)
+
+    if (!sessionMetricsForm.sessionId) {
+      setSessionMetricsStatus({ type: "error", message: "Select a session to record vitals." })
+      return
+    }
+
+    if (!supportsSessionMetrics) {
+      setSessionMetricsStatus({
+        type: "error",
+        message: "Add session_hr, session_bp_systolic, and session_bp_diastolic columns to Sessions before logging vitals.",
+      })
+      return
+    }
+
+    setUpdatingSessionMetrics(true)
+
+    const payload = {
+      session_hr: sessionMetricsForm.session_hr ? parseInt(sessionMetricsForm.session_hr, 10) : null,
+      session_bp_systolic: sessionMetricsForm.session_bp_systolic
+        ? parseInt(sessionMetricsForm.session_bp_systolic, 10)
+        : null,
+      session_bp_diastolic: sessionMetricsForm.session_bp_diastolic
+        ? parseInt(sessionMetricsForm.session_bp_diastolic, 10)
+        : null,
+    }
+
+    const { error } = await supabase.from("Sessions").update(payload).eq("id", sessionMetricsForm.sessionId)
+
+    if (error) {
+      if (error.code === "42703") {
+        setSupportsSessionMetrics(false)
+        setSessionMetricsStatus({
+          type: "error",
+          message: "Your Sessions table is missing session_hr/session_bp columns. Please add them, then try again.",
+        })
+      } else {
+        setSessionMetricsStatus({ type: "error", message: error.message })
+      }
+    } else {
+      setSessionMetricsStatus({ type: "success", message: "Vitals saved. Compare them against your baseline later." })
+      setSessionMetricsForm(SESSION_METRICS_DEFAULT)
+      await fetchSessions()
+    }
+
+    setUpdatingSessionMetrics(false)
+  }
+
+  const handleProfileSubmit = async (event) => {
+    event.preventDefault()
+    if (!userId) return
+
+    setSavingProfile(true)
+    setProfileStatus(null)
+
+    const payload = {
+      name: profileForm.name.trim() || null,
+      age: profileForm.age ? parseInt(profileForm.age, 10) : null,
+      sex: profileForm.sex || null,
+      baseline_hr: profileForm.baseline_hr ? parseInt(profileForm.baseline_hr, 10) : null,
+      baseline_bp_systolic: profileForm.baseline_bp_systolic ? parseInt(profileForm.baseline_bp_systolic, 10) : null,
+      baseline_bp_diastolic: profileForm.baseline_bp_diastolic ? parseInt(profileForm.baseline_bp_diastolic, 10) : null,
+    }
+
+    const { error } = await supabase.from("Users").update(payload).eq("id", userId)
+
+    if (error) {
+      setProfileStatus({ type: "error", message: error.message })
+    } else {
+      setProfileStatus({ type: "success", message: "Profile updated successfully." })
+      await loadProfile()
+    }
+
+    setSavingProfile(false)
   }
 
   const upcomingSessions = useMemo(() => {
@@ -348,6 +489,9 @@ export default function LandingPage({ session }) {
             />
           </label>
           {sessionError && <p className="form-error form-field--full">{sessionError}</p>}
+          <p className="helper-text form-field--full">
+            Schedule the session now; you can log the measured vitals afterward below.
+          </p>
           <div className="form-actions form-field--full">
             <button className="primary-button" type="submit" disabled={savingSession}>
               {savingSession ? "Saving session..." : "Save Session"}
@@ -376,6 +520,12 @@ export default function LandingPage({ session }) {
                     </div>
                     <div className="data-card__meta">
                       {item.duration ? <span>{item.duration} min</span> : <span>Duration TBD</span>}
+                      {item.session_hr && <span>Stress HR: {item.session_hr} bpm</span>}
+                      {item.session_bp_systolic && item.session_bp_diastolic && (
+                        <span>
+                          Stress BP: {item.session_bp_systolic}/{item.session_bp_diastolic} mmHg
+                        </span>
+                      )}
                     </div>
                     {item.notes && <p className="data-card__body">{item.notes}</p>}
                   </li>
@@ -404,12 +554,92 @@ export default function LandingPage({ session }) {
                     </div>
                     <div className="data-card__meta">
                       {item.duration ? <span>{item.duration} min</span> : <span>Duration TBD</span>}
+                      {item.session_hr && <span>Stress HR: {item.session_hr} bpm</span>}
+                      {item.session_bp_systolic && item.session_bp_diastolic && (
+                        <span>
+                          Stress BP: {item.session_bp_systolic}/{item.session_bp_diastolic} mmHg
+                        </span>
+                      )}
                     </div>
                     {item.notes && <p className="data-card__body">{item.notes}</p>}
                   </li>
                 ))}
               </ul>
             )}
+      </section>
+
+      <section className="panel-card">
+        <div className="panel-header">
+          <div>
+            <h3>Record Session Vitals</h3>
+            <p>After the event, capture the measured heart rate and blood pressure.</p>
+          </div>
+        </div>
+        <form className="form-grid" onSubmit={handleSessionMetricsSubmit}>
+          <label className="form-field">
+            <span>Select Session</span>
+            <select
+              value={sessionMetricsForm.sessionId}
+              onChange={(e) => handleSessionMetricsInput("sessionId", e.target.value)}
+              required
+            >
+              <option value="">Choose a session</option>
+              {sessions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.session_name || "Untitled session"} • {formatDate(item.session_date)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>Stress Heart Rate (bpm)</span>
+            <input
+              type="number"
+              min="1"
+              value={sessionMetricsForm.session_hr}
+              onChange={(e) => handleSessionMetricsInput("session_hr", e.target.value)}
+              placeholder="e.g., 105"
+              required
+            />
+          </label>
+          <label className="form-field">
+            <span>Stress BP - Systolic</span>
+            <input
+              type="number"
+              min="1"
+              value={sessionMetricsForm.session_bp_systolic}
+              onChange={(e) => handleSessionMetricsInput("session_bp_systolic", e.target.value)}
+              placeholder="e.g., 130"
+              required
+            />
+          </label>
+          <label className="form-field">
+            <span>Stress BP - Diastolic</span>
+            <input
+              type="number"
+              min="1"
+              value={sessionMetricsForm.session_bp_diastolic}
+              onChange={(e) => handleSessionMetricsInput("session_bp_diastolic", e.target.value)}
+              placeholder="e.g., 82"
+              required
+            />
+          </label>
+          {sessionMetricsStatus && (
+            <p
+              className={`form-feedback form-field--full ${
+                sessionMetricsStatus.type === "error" ? "form-error" : "form-success"
+              }`}
+            >
+              {sessionMetricsStatus.message}
+            </p>
+          )}
+          <div className="form-actions form-field--full">
+            <button className="primary-button" type="submit" disabled={updatingSessionMetrics || sessions.length === 0}>
+              {updatingSessionMetrics ? "Saving vitals..." : "Save Session Vitals"}
+            </button>
+          </div>
+        </form>
+        <p className="helper-text">Log the session first, then come back with your wearable readings.</p>
       </section>
     </>
   )
@@ -570,6 +800,82 @@ export default function LandingPage({ session }) {
     </section>
   )
 
+  const renderProfileTab = () => (
+    <section className="panel-card">
+      <div className="panel-header">
+        <div>
+          <h3>Update Profile</h3>
+          <p>Adjust your demographics or baseline vitals any time.</p>
+        </div>
+      </div>
+      <form className="form-grid" onSubmit={handleProfileSubmit}>
+        <label className="form-field">
+          <span>Full Name</span>
+          <input type="text" value={profileForm.name} onChange={(e) => handleProfileInput("name", e.target.value)} required />
+        </label>
+        <label className="form-field">
+          <span>Age</span>
+          <input
+            type="number"
+            min="1"
+            value={profileForm.age}
+            onChange={(e) => handleProfileInput("age", e.target.value)}
+            required
+          />
+        </label>
+        <label className="form-field">
+          <span>Sex</span>
+          <select value={profileForm.sex} onChange={(e) => handleProfileInput("sex", e.target.value)} required>
+            <option value="">Select sex</option>
+            <option value="female">Female</option>
+            <option value="male">Male</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label className="form-field">
+          <span>Baseline Heart Rate (bpm)</span>
+          <input
+            type="number"
+            min="1"
+            value={profileForm.baseline_hr}
+            onChange={(e) => handleProfileInput("baseline_hr", e.target.value)}
+            required
+          />
+        </label>
+        <label className="form-field">
+          <span>Baseline BP - Systolic</span>
+          <input
+            type="number"
+            min="1"
+            value={profileForm.baseline_bp_systolic}
+            onChange={(e) => handleProfileInput("baseline_bp_systolic", e.target.value)}
+            required
+          />
+        </label>
+        <label className="form-field">
+          <span>Baseline BP - Diastolic</span>
+          <input
+            type="number"
+            min="1"
+            value={profileForm.baseline_bp_diastolic}
+            onChange={(e) => handleProfileInput("baseline_bp_diastolic", e.target.value)}
+            required
+          />
+        </label>
+        {profileStatus && (
+          <p className={`form-feedback form-field--full ${profileStatus.type === "error" ? "form-error" : "form-success"}`}>
+            {profileStatus.message}
+          </p>
+        )}
+        <div className="form-actions form-field--full">
+          <button className="primary-button" type="submit" disabled={savingProfile}>
+            {savingProfile ? "Saving profile..." : "Save Changes"}
+          </button>
+        </div>
+      </form>
+    </section>
+  )
+
   return (
     <div className="landing-shell">
       <aside className="landing-sidebar">
@@ -578,6 +884,14 @@ export default function LandingPage({ session }) {
           <h2>{profileLoading ? "Loading..." : profile?.name || "Athlete"}</h2>
           <p className="sidebar-baseline">
             Baseline HR: <span>{profile?.baseline_hr ? `${profile.baseline_hr} bpm` : "Not recorded"}</span>
+          </p>
+          <p className="sidebar-baseline">
+            Baseline BP:{" "}
+            <span>
+              {profile?.baseline_bp_systolic && profile?.baseline_bp_diastolic
+                ? `${profile.baseline_bp_systolic}/${profile.baseline_bp_diastolic} mmHg`
+                : "Not recorded"}
+            </span>
           </p>
         </div>
 
@@ -606,7 +920,11 @@ export default function LandingPage({ session }) {
         {activeTab === "sessions" && renderSessionsTab()}
         {activeTab === "interventions" && renderInterventionsTab()}
         {activeTab === "planner" && renderPlannerTab()}
+        {activeTab === "profile" && renderProfileTab()}
       </main>
     </div>
   )
 }
+  const handleSessionMetricsInput = (field, value) => {
+    setSessionMetricsForm((prev) => ({ ...prev, [field]: value }))
+  }
