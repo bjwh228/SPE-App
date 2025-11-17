@@ -342,6 +342,12 @@
   line-height: 1.4;
 }
 
+.field-hint {
+  margin-top: 0.2rem;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
 /* Complete Profile Styles */
 .complete-profile-container {
   display: flex;
@@ -371,6 +377,13 @@
   margin: 0;
 }
 
+.complete-profile-note {
+  margin: 0.25rem 0 1.25rem;
+  color: #475569;
+  font-size: 0.95rem;
+  text-align: center;
+}
+
 .profile-input {
   width: 100%;
   max-width: 100%;
@@ -383,6 +396,17 @@
   font-family: inherit;
   transition: border-color 0.2s;
   box-sizing: border-box;
+}
+
+.baseline-bp-row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.baseline-bp-row .profile-input {
+  flex: 1;
 }
 
 .profile-input:focus {

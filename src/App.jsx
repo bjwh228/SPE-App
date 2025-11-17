@@ -88,11 +88,33 @@ export default function App() {
 
       setProfileComplete(null)
 
+      const columnSelection = "name, age, sex, baseline_hr, baseline_bp_systolic, baseline_bp_diastolic"
       const { data, error } = await supabase
         .from("Users")
-        .select("name, age, sex")
+        .select(columnSelection)
         .eq("id", session.user.id)
         .maybeSingle()
+
+      if (error && error.code === "42703") {
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from("Users")
+          .select("name, age, sex, baseline_hr")
+          .eq("id", session.user.id)
+          .maybeSingle()
+
+        if (fallbackError && fallbackError.code !== "PGRST116") {
+          console.error("Error checking profile:", fallbackError.message)
+          return
+        }
+
+        if (!fallbackData) {
+          setProfileComplete(false)
+          return
+        }
+
+        setProfileComplete(Boolean(fallbackData.name && fallbackData.age && fallbackData.sex && fallbackData.baseline_hr))
+        return
+      }
 
       if (error && error.code !== "PGRST116") {
         console.error("Error checking profile:", error.message)
@@ -104,7 +126,7 @@ export default function App() {
         return
       }
 
-      setProfileComplete(Boolean(data.name && data.age && data.sex))
+      setProfileComplete(Boolean(data.name && data.age && data.sex && data.baseline_hr))
     }
 
     checkProfile()
