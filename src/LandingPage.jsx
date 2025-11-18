@@ -54,6 +54,7 @@ export default function LandingPage({ session }) {
   const [sessionForm, setSessionForm] = useState(SESSION_FORM_DEFAULT)
   const [sessionMetricsForm, setSessionMetricsForm] = useState(SESSION_METRICS_DEFAULT)
   const [profileForm, setProfileForm] = useState(PROFILE_FORM_DEFAULT)
+  
 
   const [interventionError, setInterventionError] = useState(null)
   const [sessionError, setSessionError] = useState(null)
@@ -429,6 +430,10 @@ export default function LandingPage({ session }) {
     const date = new Date(value)
     if (Number.isNaN(date.getTime())) return "Date TBD"
     return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+  }
+
+  const handleSessionMetricsInput = (field, value) => {
+    setSessionMetricsForm((prev) => ({ ...prev, [field]: value }))
   }
 
   const renderSessionsTab = () => (
@@ -925,6 +930,3 @@ export default function LandingPage({ session }) {
     </div>
   )
 }
-  const handleSessionMetricsInput = (field, value) => {
-    setSessionMetricsForm((prev) => ({ ...prev, [field]: value }))
-  }
