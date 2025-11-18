@@ -1,0 +1,53 @@
+#include<bits/stdc++.h>
+using namespace std;
+struct Node{
+    int marbles;
+    Node* parent;
+    vector<Node*> children;
+}
+long long moves = 0;
+int dfs(Node* node){
+    int extraMarbles = cur->marbles-1;
+    for(Node* child : cur->children){
+        int childExtra = dfs(child);
+        moves += abs(childExtra);
+        extraMarbles += childExtra;
+    }
+    return extraMarbles;
+}
+int main(){
+    int n;
+    while(cin >> n){
+        if(n == 0) return 0;
+        moves = 0;
+        vector<int> isChild(n+1, 0);
+        vector<Node*> nodes(n+1, nullptr);
+        for(int i = 0; i <= n; i++){
+            nodes[i] = new Node();
+            nodes[i]->parent = nullptr;
+        }
+        for(int i = 0; i < n; i++){
+            int v,m,d;
+            cin >> v >> m >> d;
+            nodes[v]->marbles = m;
+            for(int j = 0; i < d; i++){
+                int c;
+                cin >> c;
+                nodes[v]->children.push_back(nodes[c]);
+                nodes[c]->parent = nodes[v];
+                isChild[c] = 1;
+            }
+        }
+        int root = 0;
+        for(int i = 0; i <= n; i++){
+            if(isChild[i] == 0){
+                root = i;
+                break;
+            }
+        }
+        dfs(nodes[root]);
+        cout << moves << endl;
+    }
+}
+
+
