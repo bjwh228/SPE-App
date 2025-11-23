@@ -54,6 +54,7 @@ export default function LandingPage({ session }) {
   const [sessionForm, setSessionForm] = useState(SESSION_FORM_DEFAULT)
   const [sessionMetricsForm, setSessionMetricsForm] = useState(SESSION_METRICS_DEFAULT)
   const [profileForm, setProfileForm] = useState(PROFILE_FORM_DEFAULT)
+  
 
   const [interventionError, setInterventionError] = useState(null)
   const [sessionError, setSessionError] = useState(null)
