@@ -12,7 +12,6 @@ const INTERVENTION_FORM_DEFAULT = {
   name: "",
   category: "",
   description: "",
-  active: true,
 }
 
 const SESSION_FORM_DEFAULT = {
@@ -28,6 +27,7 @@ const SESSION_METRICS_DEFAULT = {
   session_hr: "",
   session_bp_systolic: "",
   session_bp_diastolic: "",
+  score: "",
 }
 
 const PROFILE_FORM_DEFAULT = {
@@ -67,7 +67,9 @@ export default function LandingPage({ session }) {
   const [assigningPlan, setAssigningPlan] = useState(false)
   const [savingProfile, setSavingProfile] = useState(false)
 
-  const [supportsUserScopedInterventions, setSupportsUserScopedInterventions] = useState(true)
+  // Default to user-scoped; will fall back if user_id is missing on the table
+  // Interventions table in this schema has no user_id column; default false and enable only if available
+  const [supportsUserScopedInterventions, setSupportsUserScopedInterventions] = useState(false)
   const [supportsSessionMetrics, setSupportsSessionMetrics] = useState(true)
 
   const [planSelection, setPlanSelection] = useState({
@@ -142,12 +144,33 @@ export default function LandingPage({ session }) {
     const { data, error } = await query
 
     if (error) {
-      if (error.code === "42703" && supportsUserScopedInterventions) {
-        // user_id column missing, refetch without it
+      const shouldFallback =
+        supportsUserScopedInterventions &&
+        (error.code === "42703" ||
+          error.code === "PGRST116" ||
+          error.code === "400" ||
+          error.code === 400 ||
+          error.message?.toLowerCase().includes("user_id") ||
+          error.details?.toLowerCase().includes("user_id") ||
+          error.hint?.toLowerCase().includes("user_id"))
+
+      if (shouldFallback) {
         setSupportsUserScopedInterventions(false)
+
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from("Interventions")
+          .select("*")
+          .order("intervention_id", { ascending: false })
+
+        if (fallbackError) {
+          console.error("Error loading interventions (fallback):", fallbackError.message)
+          return
+        }
+
+        setInterventions(fallbackData ?? [])
         return
       }
-      console.error("Error loading interventions:", error.message)
+      console.error("Error loading interventions:", error.message || error)
       return
     }
 
@@ -186,6 +209,10 @@ export default function LandingPage({ session }) {
     setSessionForm((prev) => ({ ...prev, [field]: value }))
   }
 
+  const handleSessionMetricsInput = (field, value) => {
+    setSessionMetricsForm((prev) => ({ ...prev, [field]: value }))
+  }
+
   const handlePlanInput = (field, value) => {
     setPlanSelection((prev) => ({ ...prev, [field]: value }))
   }
@@ -206,7 +233,6 @@ export default function LandingPage({ session }) {
         name: interventionForm.name.trim(),
         category: interventionForm.category.trim() || null,
         description: interventionForm.description.trim() || null,
-        active: interventionForm.active,
       }
 
       if (includeUserId) {
@@ -218,9 +244,19 @@ export default function LandingPage({ session }) {
 
     let { error } = await attemptInsert(supportsUserScopedInterventions)
 
-    if (error && supportsUserScopedInterventions && error.code === "42703") {
-      setSupportsUserScopedInterventions(false)
-      ;({ error } = await attemptInsert(false))
+    if (error && supportsUserScopedInterventions) {
+      const missingUserIdColumn =
+        error.code === "42703" ||
+        error.code === "PGRST116" ||
+        error.message?.toLowerCase().includes("user_id") ||
+        error.details?.toLowerCase().includes("user_id") ||
+        error.code === "400" ||
+        error.code === 400
+
+      if (missingUserIdColumn) {
+        setSupportsUserScopedInterventions(false)
+        ;({ error } = await attemptInsert(false))
+      }
     }
 
     if (error) {
@@ -320,8 +356,14 @@ export default function LandingPage({ session }) {
     if (!supportsSessionMetrics) {
       setSessionMetricsStatus({
         type: "error",
-        message: "Add session_hr, session_bp_systolic, and session_bp_diastolic columns to Sessions before logging vitals.",
+        message: "Add session_hr, session_bp_systolic, session_bp_diastolic, and score columns to Sessions before logging session information.",
       })
+      return
+    }
+
+    const sessionId = sessionMetricsForm.sessionId
+    if (!sessionId) {
+      setSessionMetricsStatus({ type: "error", message: "Could not determine which session to update." })
       return
     }
 
@@ -335,22 +377,49 @@ export default function LandingPage({ session }) {
       session_bp_diastolic: sessionMetricsForm.session_bp_diastolic
         ? parseInt(sessionMetricsForm.session_bp_diastolic, 10)
         : null,
+      score: sessionMetricsForm.score ? parseFloat(sessionMetricsForm.score) : null,
     }
 
-    const { error } = await supabase.from("Sessions").update(payload).eq("id", sessionMetricsForm.sessionId)
+    const attemptUpdate = async (includeUserFilter) => {
+      let query = supabase.from("Sessions").update(payload).eq("id", sessionId)
+      if (includeUserFilter) {
+        query = query.eq("user_id", userId)
+      }
+      return query.select("*")
+    }
+
+    let { data: updatedSessions, error } = await attemptUpdate(true)
+
+    // If nothing updated or update rejected, retry without user_id filter (older rows may not have user_id populated)
+    if (
+      (!error && (!updatedSessions || updatedSessions.length === 0)) ||
+      (error && (error.code === "406" || error.code === 406 || error.code === "400" || error.code === 400))
+    ) {
+      ;({ data: updatedSessions, error } = await attemptUpdate(false))
+    }
 
     if (error) {
       if (error.code === "42703") {
         setSupportsSessionMetrics(false)
         setSessionMetricsStatus({
           type: "error",
-          message: "Your Sessions table is missing session_hr/session_bp columns. Please add them, then try again.",
+          message: "Your Sessions table is missing required columns (session_hr, session_bp, or score). Please add them, then try again.",
         })
       } else {
-        setSessionMetricsStatus({ type: "error", message: error.message })
+        setSessionMetricsStatus({
+          type: "error",
+          message: error.message || "Unable to save vitals. Check your RLS policy on Sessions for updates.",
+        })
       }
     } else {
-      setSessionMetricsStatus({ type: "success", message: "Vitals saved. Compare them against your baseline later." })
+      // Update succeeded; PostgREST may return no rows if SELECT policy is stricter than UPDATE policy.
+      setSessionMetricsStatus({ type: "success", message: "Session information saved. Compare vitals against your baseline later." })
+      const updatedSession = updatedSessions?.[0]
+      if (updatedSession) {
+        setSessions((prev) =>
+          prev.map((sessionItem) => (sessionItem.id === updatedSession.id ? updatedSession : sessionItem)),
+        )
+      }
       setSessionMetricsForm(SESSION_METRICS_DEFAULT)
       await fetchSessions()
     }
@@ -429,6 +498,41 @@ export default function LandingPage({ session }) {
     const date = new Date(value)
     if (Number.isNaN(date.getTime())) return "Date TBD"
     return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+  }
+
+  const hasValue = (value) => value !== null && value !== undefined && value !== ""
+
+  const hasSessionVitals = (sessionItem) =>
+    hasValue(sessionItem.session_hr) ||
+    hasValue(sessionItem.session_bp_systolic) ||
+    hasValue(sessionItem.session_bp_diastolic)
+
+  const renderSessionVitals = (sessionItem) => {
+    const hasVitals = hasSessionVitals(sessionItem)
+    const hasScore = hasValue(sessionItem.score)
+    
+    if (!hasVitals && !hasScore) return null
+
+    const hrText = hasValue(sessionItem.session_hr) ? `${sessionItem.session_hr} bpm` : null
+
+    const hasSystolic = hasValue(sessionItem.session_bp_systolic)
+    const hasDiastolic = hasValue(sessionItem.session_bp_diastolic)
+
+    const bpText =
+      hasSystolic || hasDiastolic
+        ? `${hasSystolic ? sessionItem.session_bp_systolic : "?"}/${hasDiastolic ? sessionItem.session_bp_diastolic : "?"} mmHg`
+        : null
+
+    return (
+      <div className="data-card__vitals">
+        <p className="data-card__eyebrow">Session information</p>
+        <div className="data-card__vitals-values">
+          {hrText && <span className="pill">HR: {hrText}</span>}
+          {bpText && <span className="pill">BP: {bpText}</span>}
+          {hasScore && <span className="pill">Score: {sessionItem.score}/100</span>}
+        </div>
+      </div>
+    )
   }
 
   const renderSessionsTab = () => (
@@ -520,13 +624,14 @@ export default function LandingPage({ session }) {
                     </div>
                     <div className="data-card__meta">
                       {item.duration ? <span>{item.duration} min</span> : <span>Duration TBD</span>}
-                      {item.session_hr && <span>Stress HR: {item.session_hr} bpm</span>}
-                      {item.session_bp_systolic && item.session_bp_diastolic && (
+                      {hasValue(item.session_hr) && <span>Stress HR: {item.session_hr} bpm</span>}
+                      {hasValue(item.session_bp_systolic) && hasValue(item.session_bp_diastolic) && (
                         <span>
                           Stress BP: {item.session_bp_systolic}/{item.session_bp_diastolic} mmHg
                         </span>
                       )}
                     </div>
+                    {renderSessionVitals(item)}
                     {item.notes && <p className="data-card__body">{item.notes}</p>}
                   </li>
                 ))}
@@ -554,13 +659,14 @@ export default function LandingPage({ session }) {
                     </div>
                     <div className="data-card__meta">
                       {item.duration ? <span>{item.duration} min</span> : <span>Duration TBD</span>}
-                      {item.session_hr && <span>Stress HR: {item.session_hr} bpm</span>}
-                      {item.session_bp_systolic && item.session_bp_diastolic && (
+                      {hasValue(item.session_hr) && <span>Stress HR: {item.session_hr} bpm</span>}
+                      {hasValue(item.session_bp_systolic) && hasValue(item.session_bp_diastolic) && (
                         <span>
                           Stress BP: {item.session_bp_systolic}/{item.session_bp_diastolic} mmHg
                         </span>
                       )}
                     </div>
+                    {renderSessionVitals(item)}
                     {item.notes && <p className="data-card__body">{item.notes}</p>}
                   </li>
                 ))}
@@ -571,8 +677,8 @@ export default function LandingPage({ session }) {
       <section className="panel-card">
         <div className="panel-header">
           <div>
-            <h3>Record Session Vitals</h3>
-            <p>After the event, capture the measured heart rate and blood pressure.</p>
+            <h3>Record Past Session Information</h3>
+            <p>After the event, capture the measured heart rate, blood pressure, and your performance score.</p>
           </div>
         </div>
         <form className="form-grid" onSubmit={handleSessionMetricsSubmit}>
@@ -624,6 +730,18 @@ export default function LandingPage({ session }) {
               required
             />
           </label>
+          <label className="form-field">
+            <span>Performance Score (1-100)</span>
+            <input
+              type="number"
+              min="1"
+              max="100"
+              step="0.1"
+              value={sessionMetricsForm.score}
+              onChange={(e) => handleSessionMetricsInput("score", e.target.value)}
+              placeholder="e.g., 85.5"
+            />
+          </label>
           {sessionMetricsStatus && (
             <p
               className={`form-feedback form-field--full ${
@@ -635,11 +753,11 @@ export default function LandingPage({ session }) {
           )}
           <div className="form-actions form-field--full">
             <button className="primary-button" type="submit" disabled={updatingSessionMetrics || sessions.length === 0}>
-              {updatingSessionMetrics ? "Saving vitals..." : "Save Session Vitals"}
+              {updatingSessionMetrics ? "Saving information..." : "Save Session Information"}
             </button>
           </div>
         </form>
-        <p className="helper-text">Log the session first, then come back with your wearable readings.</p>
+        <p className="helper-text">Log the session first, then come back with your wearable readings and performance score.</p>
       </section>
     </>
   )
@@ -672,14 +790,6 @@ export default function LandingPage({ session }) {
               onChange={(e) => handleInterventionInput("category", e.target.value)}
               placeholder="Breathing, movement, journaling..."
             />
-          </label>
-          <label className="form-field form-field--full checkbox-field">
-            <input
-              type="checkbox"
-              checked={interventionForm.active}
-              onChange={(e) => handleInterventionInput("active", e.target.checked)}
-            />
-            <span>Currently using this intervention</span>
           </label>
           <label className="form-field form-field--full">
             <span>Description</span>
@@ -715,9 +825,6 @@ export default function LandingPage({ session }) {
                         <h4>{item.name}</h4>
                         <p>{item.category || "Uncategorized"}</p>
                       </div>
-                      <span className={`pill ${item.active ? "pill--success" : "pill--muted"}`}>
-                        {item.active ? "Active" : "Paused"}
-                      </span>
                     </div>
                     {item.description && <p className="data-card__body">{item.description}</p>}
                   </li>
@@ -925,6 +1032,3 @@ export default function LandingPage({ session }) {
     </div>
   )
 }
-  const handleSessionMetricsInput = (field, value) => {
-    setSessionMetricsForm((prev) => ({ ...prev, [field]: value }))
-  }
